@@ -56,156 +56,144 @@ def load_data(path: str) -> pd.DataFrame:
 #  - y2: dynamisch (Range + dtick)
 #  - Temperaturfarben: rot > 0°, blau < 0°
 # ------------------------------------------------------------
-def make_figure(df: pd.DataFrame, y2_range=None, y2_dtick=5):
+def make_figure(df: pd.DataFrame, y2_range=None, y2_dtick=5, x_range=None):
     df = df.copy()
 
-    # Tagesmitteltemperatur (pro Kalendertag)
-    df['date'] = df['timestamp'].dt.floor('D')
-    daily_temp = df.groupby('date', as_index=False)['temperature'].mean()
+    # Tagesmitteltemperatur
+    df["date"] = df["timestamp"].dt.floor("D")
+    daily_temp = df.groupby("date", as_index=False)["temperature"].mean()
 
     fig = go.Figure()
 
-    # --- X-Bereich & Ticks vorbereiten ---
-    x_min, x_max = df['timestamp'].min(), df['timestamp'].max()
-    MONTH_ABBR_DE = {1:"Jan", 2:"Feb", 3:"Mär", 4:"Apr", 5:"Mai", 6:"Jun",
-                     7:"Jul", 8:"Aug", 9:"Sep", 10:"Okt", 11:"Nov", 12:"Dez"}
-    day_range = pd.date_range(start=x_min.normalize(), end=x_max.normalize(), freq="D")
-    tickvals = [d.tz_localize("UTC") if d.tzinfo is None else d.tz_convert("UTC") for d in day_range]
-    ticktext = [f"{MONTH_ABBR_DE[d.month]}{d.year % 100:02d}" if d.day == 1 else str(d.day) for d in day_range]
-
-    # --- Layout-Grundgerüst (Hintergrund & Rahmen ganz unten) ---
-    fig.update_layout(
-        title="Pelletstand [kg] & Temperatur (°C) über Zeit",
-        hovermode='x unified',
-        plot_bgcolor="white",
-        paper_bgcolor="white",
-        xaxis=dict(
-            title='Zeit (UTC)',
-            range=[x_min, x_max],
-            rangeslider=dict(visible=True, range=[x_min, x_max]),
-            tickmode="array",
-            tickvals=tickvals,
-            ticktext=ticktext,
-            tickangle=0,
-            showgrid=True,
-            gridcolor="lightgray",
-            gridwidth=1
-        ),
-        yaxis=dict(
-            title='Pellet [kg]',
-            range=[0, 12000],
-            dtick=2000,
-            showgrid=True,
-            gridcolor="lightgray",
-            gridwidth=1,
-            zeroline=False
-        ),
-        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='left', x=0),
-        margin=dict(l=70, r=70, t=60, b=60),
-        shapes=[
-            # Rahmen (unter allen Traces)
-            dict(type='rect', xref='paper', yref='paper',
-                 x0=0, y0=0, x1=1, y1=1,
-                 line=dict(color='black', width=1),
-                 fillcolor='rgba(0,0,0,0)',
-                 layer='below')
-        ]
-    )
-
-    # ----------------- ZEICHENREIHENFOLGE -----------------
-    # 1) Pelletkurve (soll unter den Schwellen/Temperatur liegen)
+    # -------------------- Zeichenreihenfolge --------------------
+    # 1) Pelletkurve (unten)
     fig.add_trace(go.Scatter(
-        x=df['timestamp'], y=df['pellet_kg'],
-        name='Pellet [kg]',
-        mode='lines+markers',
-        yaxis='y1',
-        line=dict(color='gray', width=2),
-        marker=dict(color='gray', size=6),
+        x=df["timestamp"], y=df["pellet_kg"],
+        name="Pellet [kg]",
+        mode="lines+markers",
+        yaxis="y1",
+        line=dict(color="gray", width=2),
+        marker=dict(color="gray", size=6),
         hovertemplate="Pellets: %{y:,.0f} kg<extra></extra>",
     ))
 
-    # 2) Pellet-Schwellen ALS TRACES (zwischen Pellet und Temperatur)
+    # 2) Pellet-Schwellen (zwischen Pellet und Temperatur)
+    x_min, x_max = df["timestamp"].min(), df["timestamp"].max()
     fig.add_trace(go.Scatter(
         x=[x_min, x_max], y=[2000, 2000],
-        name="Schwelle 2'000 kg",
-        mode='lines',
-        yaxis='y1',
-        line=dict(color='orange', width=2, dash='dash'),
-        hoverinfo='skip',
-        showlegend=True
+        name="Schwelle 2 000 kg",
+        mode="lines", yaxis="y1",
+        line=dict(color="orange", width=2, dash="dash"),
+        hoverinfo="skip", showlegend=True,
     ))
     fig.add_trace(go.Scatter(
         x=[x_min, x_max], y=[1000, 1000],
-        name="Schwelle 1'000 kg",
-        mode='lines',
-        yaxis='y1',
-        line=dict(color='red', width=2, dash='dash'),
-        hoverinfo='skip',
-        showlegend=True
+        name="Schwelle 1 000 kg",
+        mode="lines", yaxis="y1",
+        line=dict(color="red", width=2, dash="dash"),
+        hoverinfo="skip", showlegend=True,
     ))
 
-    # 3) Temperatur-Traces (ganz oben)
-    #    Farbwechsel bei 5°C, ohne durchgezogene Linien über Lücken
-    thr = 5.0
-    temp_pos = df['temperature'].where(df['temperature'] >= thr)  # rot ab 5°C
-    temp_neg = df['temperature'].where(df['temperature'] <  thr)  # blau unter 5°C
+    # 3) Temperatur (oben)
+    thr = 0.0
+    temp_pos = df["temperature"].where(df["temperature"] >= thr)
+    temp_neg = df["temperature"].where(df["temperature"] <  thr)
 
     fig.add_trace(go.Scatter(
-        x=df['timestamp'], y=temp_pos,
-        name=f'Temp ≥ {int(thr)}°C',
-        mode='lines+markers',
-        yaxis='y2',
-        line=dict(color='red', width=2),
-        marker=dict(color='red', size=6),
+        x=df["timestamp"], y=temp_pos,
+        name=f"Temp ≥ {int(thr)}°C",
+        mode="lines+markers", yaxis="y2",
+        line=dict(color="red", width=2),
+        marker=dict(color="red", size=6),
         connectgaps=False,
-        hovertemplate="Temperatur: %{y:.1f} °C<extra></extra>"
+        hovertemplate="Temperatur: %{y:.1f} °C<extra></extra>",
     ))
     fig.add_trace(go.Scatter(
-        x=df['timestamp'], y=temp_neg,
-        name=f'Temp < {int(thr)}°C',
-        mode='lines+markers',
-        yaxis='y2',
-        line=dict(color='blue', width=2),
-        marker=dict(color='blue', size=6),
+        x=df["timestamp"], y=temp_neg,
+        name=f"Temp < {int(thr)}°C",
+        mode="lines+markers", yaxis="y2",
+        line=dict(color="blue", width=2),
+        marker=dict(color="blue", size=6),
         connectgaps=False,
-        hovertemplate="Temperatur: %{y:.1f} °C<extra></extra>"
+        hovertemplate="Temperatur: %{y:.1f} °C<extra></extra>",
     ))
 
-    # Tagesmittel (Sterne) – ebenfalls oben
+    # Tagesmittel (gelbe Sterne)
     fig.add_trace(go.Scatter(
-        x=daily_temp['date'], y=daily_temp['temperature'],
-        name='Tagesmittel (°C)',
-        mode='markers',
-        yaxis='y2',
-        marker=dict(symbol='star', size=12, color='yellow',
-                    line=dict(width=1, color='black')),
-        hovertemplate="Tagesmittel: %{y:.1f} °C<extra></extra>"
+        x=daily_temp["date"], y=daily_temp["temperature"],
+        name="Tagesmittel (°C)",
+        mode="markers", yaxis="y2",
+        marker=dict(symbol="star", size=12, color="yellow",
+                    line=dict(width=1, color="black")),
+        hovertemplate="Tagesmittel: %{y:.1f} °C<extra></extra>",
     ))
-    # ------------------------------------------------------
 
-    # Rechte Achse (dynamisch/übergeben)
+    # -------------------- Achsen-Ticks --------------------
+    MONTH_ABBR_DE = {1:"Jan",2:"Feb",3:"Mär",4:"Apr",5:"Mai",6:"Jun",
+                     7:"Jul",8:"Aug",9:"Sep",10:"Okt",11:"Nov",12:"Dez"}
+    day_range = pd.date_range(start=x_min.normalize(), end=x_max.normalize(), freq="D")
+    tickvals = [d.tz_localize("UTC") if d.tzinfo is None else d.tz_convert("UTC") for d in day_range]
+    ticktext = [f"{MONTH_ABBR_DE[d.month]}{d.year%100:02d}" if d.day==1 else str(d.day) for d in day_range]
+
+    # -------------------- Dynamische rechte Achse --------------------
     if y2_range is None:
-        y2_layout = dict(
-            title='Temperatur (°C)', overlaying='y', side='right',
-            autorange=True, dtick=y2_dtick, tick0=0,
-            showgrid=False, zeroline=False
-        )
+        y2_layout = dict(title="Temperatur (°C)", overlaying="y", side="right",
+                         autorange=True, dtick=y2_dtick, tick0=0,
+                         showgrid=False, zeroline=False)
     else:
-        y2_layout = dict(
-            title='Temperatur (°C)', overlaying='y', side='right',
-            autorange=False, range=y2_range, dtick=y2_dtick, tick0=0,
-            showgrid=False, zeroline=False
-        )
-    fig.update_layout(yaxis2=y2_layout)
+        y2_layout = dict(title="Temperatur (°C)", overlaying="y", side="right",
+                         autorange=False, range=y2_range, dtick=y2_dtick, tick0=0,
+                         showgrid=False, zeroline=False)
 
-    # Optional: 10,192 → 10'192 im Pellet-Hover
+    # -------------------- X-Range respektieren --------------------
+    if x_range is None:
+        x_range = [x_min, x_max]
+
+    # -------------------- Layout-Update --------------------
+    fig.update_layout(
+        hovermode="x unified",
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+
+        # Hält Nutzerinteraktionen (Zoom/Range-Slider) trotz Figure-Updates stabil
+        uirevision="keep-my-zoom",
+
+        xaxis=dict(
+            title="Zeit (UTC)",
+            range=x_range,  # wichtig: nicht jedes Mal auf [x_min, x_max] zurücksetzen
+            tickmode="array", tickvals=tickvals, ticktext=ticktext,
+            showgrid=True, gridcolor="lightgray", gridwidth=1,
+            rangeslider=dict(visible=True)
+        ),
+        yaxis=dict(
+            title="Pellet [kg]",
+            range=[0, 12000], dtick=2000,
+            showgrid=True, gridcolor="lightgray", gridwidth=1,
+            zeroline=False
+        ),
+        yaxis2=y2_layout,
+
+        # Rahmen ganz unten
+        shapes=[dict(type="rect", xref="paper", yref="paper",
+                     x0=0, y0=0, x1=1, y1=1,
+                     line=dict(color="black", width=1),
+                     fillcolor="rgba(0,0,0,0)",
+                     layer="below")],
+
+        # etwas mehr Abstand zwischen Titel & Legende
+        title=dict(text="Pelletstand [kg] & Temperatur (°C) über Zeit",
+                   x=0.5, y=0.95),
+        legend=dict(orientation="h", yanchor="top", y=1.07,
+                    xanchor="center", x=0.5),
+        margin=dict(l=70, r=70, t=90, b=60)
+    )
+
+    # Komma → Apostroph im Pellet-Hover
     for tr in fig.data:
-        if tr.name.startswith('Pellet'):
+        if tr.name.startswith("Pellet"):
             tr.hovertemplate = tr.hovertemplate.replace(",", "&#x27;")
 
     return fig
-
-
 
 
 # ------------------------------------------------------------
@@ -270,7 +258,7 @@ app.layout = html.Div([
 ])
 
 # ------------------------------------------------------------
-# Callback: dynamische y2-Achse (Amplitude-abhängig) + Farbplot
+# Callback: dynamische y2-Achse (Amplitude-abhängig) + stabiler X-Bereich
 # ------------------------------------------------------------
 @app.callback(
     Output('stats-table', 'data'),
@@ -282,7 +270,8 @@ def update_view(relayoutData):
     dff = df[(df['timestamp'] >= start) & (df['timestamp'] <= end)]
 
     if dff.empty:
-        return make_stats(df), make_figure(df)
+        # auch wenn leer, aktuellen x_range respektieren
+        return make_stats(df), make_figure(df, x_range=[start, end])
 
     stats = make_stats(dff)
 
@@ -305,7 +294,8 @@ def update_view(relayoutData):
         lo -= dt
         hi += dt
 
-    fig = make_figure(df, y2_range=[lo, hi], y2_dtick=dt)
+    # entscheidend: x_range=[start, end] mitgeben, damit nichts springt
+    fig = make_figure(df, y2_range=[lo, hi], y2_dtick=dt, x_range=[start, end])
     return stats, fig
 
 # ------------------------------------------------------------
