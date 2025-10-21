@@ -48,37 +48,61 @@ def load_data(path: str) -> pd.DataFrame:
     return out.sort_values("timestamp").reset_index(drop=True)
 
 # ------------------------------------------------------------
-# Figure-Builder
-#  - Weißer Hintergrund
-#  - Rahmen
-#  - Einheitliches horizontales Gitter (von y1)
-#  - y1: 0–12000 kg in 2000er Schritten
-#  - y2: dynamisch (Range + dtick)
-#  - Temperaturfarben: rot > 0°, blau < 0°
+# Tagesaggregation: letzter Messpunkt pro Tag (ohne Füllung)
+# ------------------------------------------------------------
+def to_daily_last(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Genau ein Punkt/Tag: der *letzte* vorhandene Messpunkt.
+    - pellet_kg: letzter Wert des Tages
+    - temperature_mean: Tagesmittel (für Sterne)
+    Tage ohne Messung werden NICHT aufgefüllt.
+    """
+    if df.empty:
+        return pd.DataFrame(columns=["date", "pellet_kg", "temperature_mean"])
+
+    dfi = df.set_index("timestamp").sort_index()
+
+    pellet_daily = dfi["pellet_kg"].resample("D").last()          # kein ffill
+    temp_daily   = dfi["temperature"].resample("D").mean()
+
+    daily = pd.DataFrame({
+        "date": pellet_daily.index,               # tz-aware UTC
+        "pellet_kg": pellet_daily.values,
+        "temperature_mean": temp_daily.values
+    })
+
+    # Nur Tage behalten, an denen es einen Pelletswert gibt
+    daily = daily.dropna(subset=["pellet_kg"]).reset_index(drop=True)
+    return daily
+
+# ------------------------------------------------------------
+# Figure-Builder (Pellets nur noch als Tages-Endwerte)
 # ------------------------------------------------------------
 def make_figure(df: pd.DataFrame, y2_range=None, y2_dtick=5, x_range=None):
     df = df.copy()
 
-    # Tagesmitteltemperatur
-    df["date"] = df["timestamp"].dt.floor("D")
-    daily_temp = df.groupby("date", as_index=False)["temperature"].mean()
+    # Tagesdaten (letzter Messpunkt je Tag)
+    daily = to_daily_last(df)
 
     fig = go.Figure()
 
-    # -------------------- Zeichenreihenfolge --------------------
-    # 1) Pelletkurve (unten)
-    fig.add_trace(go.Scatter(
-        x=df["timestamp"], y=df["pellet_kg"],
-        name="Pellet [kg]",
-        mode="lines+markers",
-        yaxis="y1",
-        line=dict(color="gray", width=2),
-        marker=dict(color="gray", size=6),
-        hovertemplate="Pellets: %{y:,.0f} kg<extra></extra>",
-    ))
+    # -------------------- Pellets: Tages-Endwerte --------------------
+    if not daily.empty:
+        fig.add_trace(go.Bar(
+            x=daily["date"],
+            y=daily["pellet_kg"],
+            name="Pelletstand",
+            yaxis="y1",
+            marker=dict(color="saddlebrown", opacity=0.6),
+            width=24 * 60 * 60 * 1000 * 0.35,  # 35% Tagesbreite als Balken
+            hovertemplate="Pelletstand: %{y:,.0f} kg<extra></extra>",
+        ))
+        x_min, x_max = daily["date"].min(), daily["date"].max()
+    else:
+        # Fallback, falls daily leer (z. B. Datenfenster ohne Punkte)
+        x_min, x_max = df["timestamp"].min(), df["timestamp"].max()
 
-    # 2) Pellet-Schwellen (zwischen Pellet und Temperatur)
-    x_min, x_max = df["timestamp"].min(), df["timestamp"].max()
+    # Schwellen-Linien über den Pellet-Zeitraum
     fig.add_trace(go.Scatter(
         x=[x_min, x_max], y=[2000, 2000],
         name="Schwelle 2 000 kg",
@@ -94,7 +118,7 @@ def make_figure(df: pd.DataFrame, y2_range=None, y2_dtick=5, x_range=None):
         hoverinfo="skip", showlegend=True,
     ))
 
-    # 3) Temperatur (oben)
+    # -------------------- Temperatur (Originalzeitreihe) --------------------
     thr = 0.0
     temp_pos = df["temperature"].where(df["temperature"] >= thr)
     temp_neg = df["temperature"].where(df["temperature"] <  thr)
@@ -118,49 +142,46 @@ def make_figure(df: pd.DataFrame, y2_range=None, y2_dtick=5, x_range=None):
         hovertemplate="Temperatur: %{y:.1f} °C<extra></extra>",
     ))
 
-    # Tagesmittel (gelbe Sterne)
-    fig.add_trace(go.Scatter(
-        x=daily_temp["date"], y=daily_temp["temperature"],
-        name="Tagesmittel (°C)",
-        mode="markers", yaxis="y2",
-        marker=dict(symbol="star", size=12, color="yellow",
-                    line=dict(width=1, color="black")),
-        hovertemplate="Tagesmittel: %{y:.1f} °C<extra></extra>",
-    ))
+    # Tagesmittel-Temperatur als Sterne (aus daily.temperature_mean)
+    if not daily.empty:
+        fig.add_trace(go.Scatter(
+            x=daily["date"], y=daily["temperature_mean"],
+            name="Tagesmittel (°C)",
+            mode="markers", yaxis="y2",
+            marker=dict(symbol="star", size=12, color="yellow",
+                        line=dict(width=1, color="black")),
+            hovertemplate="Tagesmittel: %{y:.1f} °C<extra></extra>",
+        ))
 
     # -------------------- Achsen-Ticks --------------------
     MONTH_ABBR_DE = {1:"Jan",2:"Feb",3:"Mär",4:"Apr",5:"Mai",6:"Jun",
                      7:"Jul",8:"Aug",9:"Sep",10:"Okt",11:"Nov",12:"Dez"}
-    day_range = pd.date_range(start=x_min.normalize(), end=x_max.normalize(), freq="D")
-    tickvals = [d.tz_localize("UTC") if d.tzinfo is None else d.tz_convert("UTC") for d in day_range]
+    # Für die X-Achse nutzen wir den Pellet-Zeitraum
+    day_range = pd.date_range(start=x_min.normalize(), end=x_max.normalize(), freq="D", tz="UTC")
+    tickvals = list(day_range)
     ticktext = [f"{MONTH_ABBR_DE[d.month]}{d.year%100:02d}" if d.day==1 else str(d.day) for d in day_range]
 
-    # -------------------- Dynamische rechte Achse --------------------
-    if y2_range is None:
-        y2_layout = dict(title="Temperatur (°C)", overlaying="y", side="right",
-                         autorange=True, dtick=y2_dtick, tick0=0,
-                         showgrid=False, zeroline=False)
-    else:
-        y2_layout = dict(title="Temperatur (°C)", overlaying="y", side="right",
-                         autorange=False, range=y2_range, dtick=y2_dtick, tick0=0,
-                         showgrid=False, zeroline=False)
+    # -------------------- y2-Layout & x-Range --------------------
+    y2_layout = (dict(title="Temperatur (°C)", overlaying="y", side="right",
+                      autorange=True, dtick=y2_dtick, tick0=0,
+                      showgrid=False, zeroline=False)
+                 if y2_range is None else
+                 dict(title="Temperatur (°C)", overlaying="y", side="right",
+                      autorange=False, range=y2_range, dtick=y2_dtick, tick0=0,
+                      showgrid=False, zeroline=False))
 
-    # -------------------- X-Range respektieren --------------------
     if x_range is None:
         x_range = [x_min, x_max]
 
-    # -------------------- Layout-Update --------------------
     fig.update_layout(
         hovermode="x unified",
         plot_bgcolor="white",
         paper_bgcolor="white",
-
-        # Hält Nutzerinteraktionen (Zoom/Range-Slider) trotz Figure-Updates stabil
+        # hält Zoom/Slider-Interaktionen stabil
         uirevision="keep-my-zoom",
-
         xaxis=dict(
             title="Zeit (UTC)",
-            range=x_range,  # wichtig: nicht jedes Mal auf [x_min, x_max] zurücksetzen
+            range=x_range,
             tickmode="array", tickvals=tickvals, ticktext=ticktext,
             showgrid=True, gridcolor="lightgray", gridwidth=1,
             rangeslider=dict(visible=True)
@@ -172,20 +193,23 @@ def make_figure(df: pd.DataFrame, y2_range=None, y2_dtick=5, x_range=None):
             zeroline=False
         ),
         yaxis2=y2_layout,
-
-        # Rahmen ganz unten
         shapes=[dict(type="rect", xref="paper", yref="paper",
                      x0=0, y0=0, x1=1, y1=1,
                      line=dict(color="black", width=1),
                      fillcolor="rgba(0,0,0,0)",
                      layer="below")],
-
-        # etwas mehr Abstand zwischen Titel & Legende
-        title=dict(text="Pelletstand [kg] & Temperatur (°C) über Zeit",
+        title=dict(text="Pelletstand [kg] (letzter Wert je Tag) & Temperatur (°C)",
                    x=0.5, y=0.95),
-        legend=dict(orientation="h", yanchor="top", y=1.07,
-                    xanchor="center", x=0.5),
-        margin=dict(l=70, r=70, t=90, b=60)
+        legend=dict(
+            orientation="h",          # horizontal
+            yanchor="bottom",
+            y=1.12,                   # etwas über dem Plot
+            xanchor="center",
+            x=0.5,                    # mittig
+            bordercolor="lightgray",
+            borderwidth=1,
+        ),
+        margin=dict(l=70, r=70, t=100, b=60)
     )
 
     # Komma → Apostroph im Pellet-Hover
@@ -195,9 +219,8 @@ def make_figure(df: pd.DataFrame, y2_range=None, y2_dtick=5, x_range=None):
 
     return fig
 
-
 # ------------------------------------------------------------
-# Statistik erstellen
+# Statistik erstellen (auf Rohdaten)
 # ------------------------------------------------------------
 def make_stats(dfs: pd.DataFrame):
     return [
@@ -246,7 +269,7 @@ initial_fig = make_figure(df)
 app.layout = html.Div([
     dcc.Graph(id='pellet-temp-graph', figure=initial_fig),
     html.Div([
-        html.H3("Statistiken"),
+        html.H3("Statistiken (Rohdaten im sichtbaren Bereich)"),
         dash_table.DataTable(
             id='stats-table',
             columns=[{"name": "Metrik", "id": "metric"}, {"name": "Wert", "id": "value"}],
@@ -258,7 +281,7 @@ app.layout = html.Div([
 ])
 
 # ------------------------------------------------------------
-# Callback: dynamische y2-Achse (Amplitude-abhängig) + stabiler X-Bereich
+# Callback: Stats auf Rohdaten; y2 dynamisch; X-Bereich stabil
 # ------------------------------------------------------------
 @app.callback(
     Output('stats-table', 'data'),
@@ -273,12 +296,12 @@ def update_view(relayoutData):
         # auch wenn leer, aktuellen x_range respektieren
         return make_stats(df), make_figure(df, x_range=[start, end])
 
+    # Stats basieren weiterhin auf ROHDATEN (z. B. 10-min)
     stats = make_stats(dff)
 
+    # y2 dynamisch
     t_min, t_max = float(dff['temperature'].min()), float(dff['temperature'].max())
     amplitude = t_max - t_min
-
-    # Dynamische Tickregel
     if amplitude > 36:
         dt = 8
     elif amplitude > 24:
@@ -294,7 +317,7 @@ def update_view(relayoutData):
         lo -= dt
         hi += dt
 
-    # entscheidend: x_range=[start, end] mitgeben, damit nichts springt
+    # entscheidend: x_range=[start, end], damit nichts springt
     fig = make_figure(df, y2_range=[lo, hi], y2_dtick=dt, x_range=[start, end])
     return stats, fig
 
